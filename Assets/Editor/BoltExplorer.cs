@@ -21,7 +21,9 @@ public class BoltExplorer : EditorWindow
     {
         public Bolt.FlowMachine flowMachine;
         public Bolt.FlowGraph flowGraph;
+        public bool isInput;
         public Bolt.ValueInput valueInput;
+        public Bolt.ValueOutput valueOutput;
     }
 
     private class SearchResult
@@ -62,7 +64,6 @@ public class BoltExplorer : EditorWindow
         {
             foreach (var input in unit.inputs)
             {
-                //Debug.Log("In " + input.ToString());
                 var valueInput = input as Bolt.ValueInput;
                 if (valueInput != null)
                 {
@@ -74,43 +75,36 @@ public class BoltExplorer : EditorWindow
                         // Collect!
                         var unitData = new UnitData()
                         {
+                            isInput = true,
                             valueInput = valueInput,
                             flowGraph = graph,
                             flowMachine = fm
                         };
                         unitList.Add(unitData);
                     }
-                    /*
-                    FieldInfo[] fis = t.GetFields(BindingFlags.NonPublic | BindingFlags.Instance);
-                    if (fis != null)
-                    {
-                        foreach (FieldInfo fi in fis)
-                        {
-                            Debug.Log("  Field = " + fi.Name);
-                        }
-                    }
-                    PropertyInfo[] pis = t.GetProperties(BindingFlags.NonPublic | BindingFlags.Instance);
-                    if (pis != null)
-                    {
-                        foreach (PropertyInfo pi in pis)
-                        {
-                            Debug.Log("  Property = " + pi.Name);
-                        }
-                    }
-                    MethodInfo[] mis = t.GetMethods(BindingFlags.NonPublic | BindingFlags.Instance);
-                    if (mis != null)
-                    {
-                        foreach (MethodInfo mi in mis)
-                        {
-                            Debug.Log("  Method = " + mi.Name);
-                        }
-                    }
-                    */
                 }
             }
             foreach (var output in unit.outputs)
             {
-                //Debug.Log("Out " + output.ToString());
+                var valueOutput = output as Bolt.ValueOutput;
+                if (valueOutput != null)
+                {
+                    var t = valueOutput.type;
+
+                    // Collect string type only
+                    if (t == typeof(string))
+                    {
+                        // Collect!
+                        var unitData = new UnitData()
+                        {
+                            isInput = false,
+                            valueOutput = valueOutput,
+                            flowGraph = graph,
+                            flowMachine = fm
+                        };
+                        unitList.Add(unitData);
+                    }
+                }
             }
         }
     }
@@ -145,21 +139,47 @@ public class BoltExplorer : EditorWindow
                 searchResultList.Clear();
                 foreach (UnitData ud in unitList)
                 {
-                    var t = ud.valueInput.GetType();
-
-                    PropertyInfo defaultValuePI = t.GetProperty("_defaultValue", BindingFlags.NonPublic | BindingFlags.Instance);
-                    if (defaultValuePI != null)
+                    var t = ud.isInput? ud.valueInput.GetType(): ud.valueOutput.GetType();
+                    var isFound = false;
+                    if (ud.isInput)
                     {
-                        var value = defaultValuePI.GetValue(ud.valueInput);
-                        if (string.IsNullOrEmpty(filter) || value.ToString().IndexOf(filter, System.StringComparison.OrdinalIgnoreCase) >= 0)
+                        PropertyInfo defaultValuePI = t.GetProperty("_defaultValue", BindingFlags.NonPublic | BindingFlags.Instance);
+                        if (defaultValuePI != null)
                         {
-                            // Found!
-                            var sr = new SearchResult()
+                            var value = defaultValuePI.GetValue(ud.valueInput);
+                            if (string.IsNullOrEmpty(filter) || value.ToString().IndexOf(filter, System.StringComparison.OrdinalIgnoreCase) >= 0)
                             {
-                                unitData = ud
-                            };
-                            searchResultList.Add(sr);
+                                isFound = true;
+                            }
                         }
+                    }
+                    else
+                    {
+                        FieldInfo getValueFI = t.GetField("getValue", BindingFlags.NonPublic | BindingFlags.Instance);
+                        if (getValueFI != null)
+                        {
+                            var getValueFunc = (System.Func<Bolt.Flow, System.Object>)getValueFI.GetValue(ud.valueOutput);
+                            var obj = getValueFunc.Target;
+                            if (obj.GetType() == typeof(Bolt.Literal))
+                            {
+                                var literal = obj as Bolt.Literal;
+                                var value = literal.value;
+                                if (string.IsNullOrEmpty(filter) || value.ToString().IndexOf(filter, System.StringComparison.OrdinalIgnoreCase) >= 0)
+                                {
+                                    isFound = true;
+                                }
+                            }
+                        }
+                    }
+
+                    // Found!
+                    if (isFound)
+                    {
+                        var sr = new SearchResult()
+                        {
+                            unitData = ud
+                        };
+                        searchResultList.Add(sr);
                     }
                 }
             }
@@ -167,7 +187,7 @@ public class BoltExplorer : EditorWindow
             foreach (var sr in searchResultList)
             {
                 var fm = sr.unitData.flowMachine;
-                var unit = sr.unitData.valueInput.unit;
+                var unit = sr.unitData.isInput? sr.unitData.valueInput.unit: sr.unitData.valueOutput.unit;
                 var graph = sr.unitData.flowGraph;
                 EditorGUILayout.ObjectField(fm, typeof(Bolt.FlowMachine), true);
                 if (GUILayout.Button("Focus"))
@@ -176,7 +196,7 @@ public class BoltExplorer : EditorWindow
                     Selection.activeObject = fm;
                     graph.pan = unit.position;
                 }
-                EditorGUILayout.LabelField(sr.unitData.valueInput.key);
+                EditorGUILayout.LabelField(sr.unitData.isInput ? ">" + sr.unitData.valueInput.key : "<" + sr.unitData.valueOutput.key);
             }
 
             if (GUILayout.Button("Test"))

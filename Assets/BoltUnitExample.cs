@@ -21,8 +21,11 @@ namespace SS
     [UnitShortTitle("Bolt Unit Example")]
     public class BoltUnitExample : Unit
     {
+        [Inspectable]
         public int intValue;
+        [Inspectable]
         public float floatValue;
+        [Inspectable]
         public string stringValue;
 
         [DoNotSerialize]
