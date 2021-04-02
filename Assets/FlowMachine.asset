@@ -1,0 +1,20 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: -1893448595, guid: a040fb66244a7f54289914d98ea4ef7d, type: 3}
+  m_Name: FlowMachine
+  m_EditorClassIdentifier: 
+  _data:
+    _json: '{"graph":{"variables":{"collection":{"$content":[],"$version":"A"},"$version":"A"},"controlInputDefinitions":[],"controlOutputDefinitions":[],"valueInputDefinitions":[],"valueOutputDefinitions":[],"title":null,"summary":null,"pan":{"x":806.6786,"y":-470.4504},"zoom":0.25,"elements":[{"intValue":0,"floatValue":0.0,"stringValue":null,"defaultValues":{"Value
+      Input":{"$content":23234,"$type":"System.Int32"},"valueInputString":{"$content":"test","$type":"System.String"}},"position":{"x":56.0,"y":-306.0},"guid":"6b9703f6-c74c-4e83-a1cf-fba9ef7b861f","$version":"A","$type":"SS.BoltUnitExample"},{"type":"System.String","value":{"$content":"test","$type":"System.String"},"defaultValues":{},"position":{"x":640.0,"y":-241.0},"guid":"1c0bf817-1e6d-4430-bdb5-1151bb0dc610","$version":"A","$type":"Bolt.Literal"},{"type":"System.String","value":{"$content":"test","$type":"System.String"},"defaultValues":{},"position":{"x":1616.0,"y":-353.0},"guid":"365675b6-ca26-4267-b55e-da841a1e079a","$version":"A","$type":"Bolt.Literal"},{"type":"System.String","value":{"$content":"test","$type":"System.String"},"defaultValues":{},"position":{"x":1640.0,"y":155.0},"guid":"9bafb7f4-0aba-439e-aa9f-e7f4efb50c4a","$version":"A","$type":"Bolt.Literal"},{"intValue":0,"floatValue":0.0,"stringValue":null,"defaultValues":{"Value
+      Input":{"$content":23234,"$type":"System.Int32"},"valueInputString":{"$content":"test","$type":"System.String"}},"position":{"x":1326.0,"y":-245.0},"guid":"82884697-2f6f-4359-9ede-6fa2bc8eb1cc","$version":"A","$type":"SS.BoltUnitExample"},{"intValue":0,"floatValue":0.0,"stringValue":null,"defaultValues":{"Value
+      Input":{"$content":23234,"$type":"System.Int32"},"valueInputString":{"$content":"test","$type":"System.String"}},"position":{"x":1969.0,"y":-354.0},"guid":"67eaad37-fb25-4014-a2a5-c52b200d75e0","$version":"A","$type":"SS.BoltUnitExample"}],"$version":"A"}}'
+    _objectReferences: []
