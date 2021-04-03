@@ -1,8 +1,9 @@
 ﻿using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
-using UnityEditor;
+using UnityEngine.SceneManagement;
 using System.Reflection;
+using UnityEditor;
 
 public class BoltExplorer : EditorWindow
 {
@@ -19,11 +20,15 @@ public class BoltExplorer : EditorWindow
 
     private class UnitData
     {
+        public string hierachy;
+        public Scene scene;
         public Bolt.FlowMachine flowMachine;
         public Bolt.FlowGraph flowGraph;
         public bool isInput;
         public Bolt.ValueInput valueInput;
+        public object inputValue;
         public Bolt.ValueOutput valueOutput;
+        public object outputValue;
     }
 
     private class SearchResult
@@ -57,11 +62,24 @@ public class BoltExplorer : EditorWindow
     {
         if (fm == null)
             return;
+
+        var hierachy = (fm.gameObject.scene.IsValid()? fm.gameObject.scene.name: "[Prefab]") + "/" + fm.name;
         flowMachineList.Add(fm);
 
         var graph = fm.graph;
+        Collect(graph, fm, hierachy);
+    }
+
+    void Collect(Bolt.FlowGraph graph, Bolt.FlowMachine fm, string hierachy)
+    {
         foreach (var unit in graph.units)
         {
+            if (unit.GetType() == typeof(Bolt.SuperUnit))
+            {
+                var superUnit = unit as Bolt.SuperUnit;
+                if (superUnit != null && superUnit.nest.graph != graph)
+                    Collect(superUnit.nest.graph, fm, hierachy + "/" + superUnit.ToString());
+            }
             foreach (var input in unit.inputs)
             {
                 var valueInput = input as Bolt.ValueInput;
@@ -78,7 +96,9 @@ public class BoltExplorer : EditorWindow
                             isInput = true,
                             valueInput = valueInput,
                             flowGraph = graph,
-                            flowMachine = fm
+                            flowMachine = fm,
+                            hierachy = hierachy,
+                            scene = fm.gameObject.scene
                         };
                         unitList.Add(unitData);
                     }
@@ -100,7 +120,9 @@ public class BoltExplorer : EditorWindow
                             isInput = false,
                             valueOutput = valueOutput,
                             flowGraph = graph,
-                            flowMachine = fm
+                            flowMachine = fm,
+                            hierachy = hierachy,
+                            scene = fm.gameObject.scene
                         };
                         unitList.Add(unitData);
                     }
@@ -143,18 +165,31 @@ public class BoltExplorer : EditorWindow
                     var isFound = false;
                     if (ud.isInput)
                     {
+                        // Get Value input default value
                         PropertyInfo defaultValuePI = t.GetProperty("_defaultValue", BindingFlags.NonPublic | BindingFlags.Instance);
-                        if (defaultValuePI != null)
+                        if (ud.valueInput.hasDefaultValue)
                         {
-                            var value = defaultValuePI.GetValue(ud.valueInput);
-                            if (string.IsNullOrEmpty(filter) || value.ToString().IndexOf(filter, System.StringComparison.OrdinalIgnoreCase) >= 0)
+                            if (defaultValuePI != null)
                             {
-                                isFound = true;
+                                try
+                                {
+                                    var value = defaultValuePI.GetValue(ud.valueInput);
+                                    ud.inputValue = value;
+                                    if (string.IsNullOrEmpty(filter) || value.ToString().IndexOf(filter, System.StringComparison.OrdinalIgnoreCase) >= 0)
+                                    {
+                                        isFound = true;
+                                    }
+                                }
+                                catch (System.Exception e)
+                                {
+                                    Debug.LogException(e, ud.flowMachine);
+                                }
                             }
                         }
                     }
                     else
                     {
+                        // Get Value output value (function)
                         FieldInfo getValueFI = t.GetField("getValue", BindingFlags.NonPublic | BindingFlags.Instance);
                         if (getValueFI != null)
                         {
@@ -164,6 +199,7 @@ public class BoltExplorer : EditorWindow
                             {
                                 var literal = obj as Bolt.Literal;
                                 var value = literal.value;
+                                ud.outputValue = value;
                                 if (string.IsNullOrEmpty(filter) || value.ToString().IndexOf(filter, System.StringComparison.OrdinalIgnoreCase) >= 0)
                                 {
                                     isFound = true;
@@ -186,9 +222,11 @@ public class BoltExplorer : EditorWindow
 
             foreach (var sr in searchResultList)
             {
+                EditorGUILayout.BeginHorizontal();
                 var fm = sr.unitData.flowMachine;
                 var unit = sr.unitData.isInput? sr.unitData.valueInput.unit: sr.unitData.valueOutput.unit;
                 var graph = sr.unitData.flowGraph;
+                EditorGUILayout.LabelField(sr.unitData.hierachy);
                 EditorGUILayout.ObjectField(fm, typeof(Bolt.FlowMachine), true);
                 if (GUILayout.Button("Focus"))
                 {
@@ -196,24 +234,10 @@ public class BoltExplorer : EditorWindow
                     Selection.activeObject = fm;
                     graph.pan = unit.position;
                 }
-                EditorGUILayout.LabelField(sr.unitData.isInput ? ">" + sr.unitData.valueInput.key : "<" + sr.unitData.valueOutput.key);
-            }
-
-            if (GUILayout.Button("Test"))
-            {
-                Debug.Log("");
-
-
-            }
-            if (GUILayout.Button("Test2"))
-            {
-                var gw = EditorWindow.GetWindow<Ludiq.GraphWindow>();
-                PropertyInfo pi = gw.GetType().GetProperty("graph", BindingFlags.NonPublic | BindingFlags.Instance);
-                if (pi != null)
-                {
-                    gw.Repaint();
-                }
-                Debug.Log(gw.titleContent.text);
+                var portName = sr.unitData.isInput ? "> " + sr.unitData.valueInput.key : "< " + sr.unitData.valueOutput.key;
+                var valueContent = sr.unitData.isInput ? sr.unitData.inputValue as string : sr.unitData.outputValue as string;
+                EditorGUILayout.LabelField(string.Format("{0} = {1}", portName, valueContent));
+                EditorGUILayout.EndHorizontal();
             }
         }
         EditorGUILayout.EndScrollView();
