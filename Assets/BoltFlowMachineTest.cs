@@ -1,21 +1,42 @@
 ﻿using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using Bolt;
+using Ludiq;
 
 public class BoltFlowMachineTest : MonoBehaviour
 {
-    public Bolt.FlowGraph flowGraph;
+    public FlowMacro flowMacro;
 
+    private GraphReference graphReference;
 
-    // Start is called before the first frame update
-    void Start()
+    [ContextMenu("Edit Graph")]
+    void EditGraph()
     {
-        
+        if (graphReference.IsUnityNull())
+        {
+            graphReference = GraphReference.New(flowMacro, ensureValid: true);
+        }
+        if (!graphReference.IsUnityNull() && graphReference.isValid)
+        {
+            GraphWindow.OpenActive(graphReference);
+        }
     }
 
-    // Update is called once per frame
-    void Update()
+    [ContextMenu("Tranverse Graph")]
+    void TraverseGraph()
     {
-        
+        if (!graphReference.IsUnityNull() && graphReference.isValid)
+        {
+            var so = graphReference.scriptableObject;
+        }
+        else
+        {
+            FlowGraph flowGraph = flowMacro.graph;
+            foreach (var unit in flowGraph.units)
+            {
+                Debug.Log(unit);
+            }
+        }
     }
 }
