@@ -19,6 +19,8 @@ public class BoltExplorer : EditorWindow
     static MonoBehaviour targetMonoBehaviour;
     static MonoBehaviour[] monoBehaviours;
     static string filter = string.Empty;
+    static int pageLimit = 50;
+    static int currPage = 0;
 
     private class UnitData
     {
@@ -119,6 +121,9 @@ public class BoltExplorer : EditorWindow
 
     void Collect(FlowGraph graph, MonoBehaviour mb, FlowMacro flowMacro, string hierachy)
     {
+        if (graph.IsUnityNull())
+            return;
+
         foreach (var unit in graph.units)
         {
             var unitData = new UnitData()
@@ -291,8 +296,21 @@ public class BoltExplorer : EditorWindow
                 }
             }
 
+            pageLimit = EditorGUILayout.IntField("Page Limit", pageLimit);
+            int refCount = 0;
+
             foreach (var sr in searchResultList)
             {
+                if (refCount < currPage * pageLimit || refCount >= (currPage + 1) * pageLimit)
+                {
+                    refCount++;
+                    continue;
+                }
+                else
+                {
+                    refCount++;
+                }
+
                 EditorGUILayout.BeginHorizontal();
                 var fm = sr.unitData.monoBehaviour;
                 var unit = sr.unitData.unit;
@@ -318,7 +336,45 @@ public class BoltExplorer : EditorWindow
                 }
                 EditorGUILayout.EndHorizontal();
             }
+
+            EditorGUILayout.BeginHorizontal();
+            {
+                if (GUILayout.Button("|<"))
+                {
+                    currPage = 0;
+                }
+                if (GUILayout.Button("<"))
+                {
+                    if (currPage <= 0)
+                    {
+                        currPage = 0;
+                    }
+                    else
+                    {
+                        currPage--;
+                    }
+                }
+                EditorGUILayout.LabelField(string.Format("Page = {0} / {1}", currPage + 1, 1 + (refCount - 1) / pageLimit));
+                if (GUILayout.Button(">"))
+                {
+                    if (currPage >= (refCount - 1) / pageLimit)
+                    {
+                        currPage = ((refCount - 1) / pageLimit);
+                    }
+                    else
+                    {
+                        currPage++;
+                    }
+                }
+                if (GUILayout.Button(">|"))
+                {
+                    currPage = ((refCount - 1) / pageLimit);
+                }
+            }
+            EditorGUILayout.EndHorizontal();
         }
+
+
         EditorGUILayout.EndScrollView();
     }
 }
