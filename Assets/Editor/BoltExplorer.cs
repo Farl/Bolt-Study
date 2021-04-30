@@ -105,6 +105,7 @@ public class BoltExplorer : EditorWindow
 
     private class PortData
     {
+        public PropertyInfo pi;
         public bool isInput;
         public ValueInput valueInput;
         public object inputValue;
@@ -115,56 +116,68 @@ public class BoltExplorer : EditorWindow
     private class SearchResult
     {
         public UnitData unitData;
-        public int portIndex = -1;
+        public HashSet<int> matchPorts = new HashSet<int>();
     }
 
     static List<MonoBehaviour> monoBehaviourList = new List<MonoBehaviour>();
     static List<UnitData> unitList = new List<UnitData>();
-    static List<SearchResult> searchResultList = new List<SearchResult>();
+    static Dictionary<IUnit, SearchResult> searchResultMap = new Dictionary<IUnit, SearchResult>();
 
     private enum Mode
     {
         Scene = 0,
-        Project = 1
+        Project = 1,
+        FlowMacro = 2,
+        Selection = 3
     }
     static Mode mode = Mode.Scene;
 
-    private enum SearchTarget
-    {
-        GameObject = 0,
-        FlowMacro = 1,
-    }
-    static SearchTarget searchTarget = SearchTarget.GameObject;
-
+    #region Collect
     void Collect()
     {
-        if (searchTarget == SearchTarget.GameObject)
+        switch (mode)
         {
-            GameObject[] gos = Resources.FindObjectsOfTypeAll<GameObject>();
-            foreach (var go in gos)
-            {
-                if ((mode == Mode.Scene) == go.scene.IsValid())
+            case Mode.Scene:
+            case Mode.Project:
+                var gos = Resources.FindObjectsOfTypeAll<GameObject>();
+                foreach (var go in gos)
                 {
-                    var fms = go.GetComponentsInChildren<MonoBehaviour>();
+                    if ((mode == Mode.Scene) == go.scene.IsValid())
+                    {
+                        var fms = go.GetComponentsInChildren<MonoBehaviour>(true);
+                        Collect(fms);
+                    }
+                }
+                break;
+
+            case Mode.FlowMacro:
+                var guids = AssetDatabase.FindAssets("t:FlowMacro");
+                foreach (var guid in guids)
+                {
+                    var assetPath = AssetDatabase.GUIDToAssetPath(guid);
+                    var flowMacro = AssetDatabase.LoadAssetAtPath<FlowMacro>(assetPath);
+                    if (flowMacro)
+                        Collect(flowMacro.graph, null, flowMacro, assetPath);
+                }
+                break;
+
+            case Mode.Selection:
+                gos = Selection.gameObjects;
+                foreach (var go in gos)
+                {
+                    var fms = go.GetComponentsInChildren<MonoBehaviour>(true);
                     Collect(fms);
                 }
-            }
-        }
-        else
-        {
-            var guids = AssetDatabase.FindAssets("t:FlowMacro");
-            foreach (var guid in guids)
-            {
-                var assetPath = AssetDatabase.GUIDToAssetPath(guid);
-                var flowMacro = AssetDatabase.LoadAssetAtPath<FlowMacro>(assetPath);
-                if (flowMacro)
-                    Collect(flowMacro.graph, null, flowMacro, assetPath);
-            }
+                break;
+            default:
+                break;
         }
     }
 
     void Collect(MonoBehaviour[] mbs)
     {
+        if (mbs == null)
+            return;
         foreach (var f in mbs)
         {
             Collect(f);
@@ -223,7 +236,7 @@ public class BoltExplorer : EditorWindow
                 flowMacro = flowMacro,
                 monoBehaviour = mb,
                 hierachy = hierachy,
-                scene = (mb != null)? mb.gameObject.scene: new Scene()
+                scene = (mb != null) ? mb.gameObject.scene : new Scene()
             };
             unitList.Add(unitData);
 
@@ -234,6 +247,53 @@ public class BoltExplorer : EditorWindow
                 if (superUnit != null && superUnit.nest.graph != graph)
                     Collect(superUnit.nest.graph, mb, flowMacro, hierachy + "/" + superUnit.ToString());
             }
+
+            var unitType = unit.GetType();
+            PropertyInfo[] pis = unitType.GetProperties(BindingFlags.Public | BindingFlags.Instance);
+            foreach (var pi in pis)
+            {
+                if (pi.PropertyType == typeof(ValueInput))
+                {
+                    ValueInput vi = pi.GetValue(unit) as ValueInput;
+                    // Collect string type only
+                    if (!vi.IsUnityNull() && vi.type == typeof(string))
+                    {
+                        // Collect!
+                        var portData = new PortData()
+                        {
+                            pi = pi,
+                            isInput = true,
+                            valueInput = vi,
+                        };
+                        unitData.portDatas.Add(portData);
+                    }
+                }
+                else if (pi.PropertyType == typeof(ValueOutput))
+                {
+                    ValueOutput vo = pi.GetValue(unit) as ValueOutput;
+                    // Collect string type only
+                    if (!vo.IsUnityNull() && vo.type == typeof(string))
+                    {
+                        // Collect!
+                        var portData = new PortData()
+                        {
+                            pi = pi,
+                            isInput = false,
+                            valueOutput = vo,
+                        };
+                        unitData.portDatas.Add(portData);
+                    }
+                }
+            }
+            FieldInfo[] fis = unitType.GetFields(BindingFlags.Public | BindingFlags.Instance);
+            foreach (var fi in fis)
+            {
+                if (fi.FieldType == typeof(string))
+                {
+
+                }
+            }
+            /*
             foreach (var input in unit.inputs)
             {
                 var valueInput = input as ValueInput;
@@ -274,127 +334,151 @@ public class BoltExplorer : EditorWindow
                     }
                 }
             }
+            */
         }
     }
+    #endregion
 
     private Vector2 scrollPosition;
 
+    #region Search
+    private void AddSearchResult(UnitData unitData, int portIndex = -1)
+    {
+        var unit = unitData.unit;
+        if (unit.IsUnityNull())
+            return;
+
+        SearchResult searchResult;
+        if (searchResultMap.ContainsKey(unit))
+        {
+            searchResult = searchResultMap[unit];
+        }
+        else
+        {
+            searchResult = new SearchResult()
+            {
+                unitData = unitData,
+            };
+            searchResultMap.Add(unit, searchResult);
+        }
+        if (searchResult != null)
+        {
+            if (!searchResult.matchPorts.Contains(portIndex))
+                searchResult.matchPorts.Add(portIndex);
+        }
+    }
+
+    private void Search()
+    {
+        n.ResetPage();
+        searchResultMap.Clear();
+        foreach (UnitData ud in unitList)
+        {
+            var unit = ud.unit;
+
+            // Match unit name
+            var uid = unit.ToString();
+            var collectAllName = uid.Substring(0, uid.IndexOf('#'));
+            var unitType = unit.GetType();
+            var ta = unitType.GetAttribute<UnitShortTitleAttribute>();
+            if (ta != null)
+            {
+                collectAllName += "," + ta.title;
+            }
+            var sta = unitType.GetAttribute<UnitTitleAttribute>();
+            if (sta != null)
+            {
+                collectAllName += "," + sta.title;
+            }
+            if (unitType == typeof(SuperUnit))
+            {
+                var su = unit as SuperUnit;
+                if (!su.nest.graph.IsUnityNull())
+                {
+                    collectAllName += "," + su.nest.graph.title;
+                }
+            }
+            if (collectAllName.Replace(" ", string.Empty).IndexOf(filter.Replace(" ", string.Empty), System.StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                AddSearchResult(ud);
+            }
+
+            for (int i = 0; i < ud.portDatas.Count; i++)
+            {
+                var pd = ud.portDatas[i];
+
+                var t = pd.isInput ? pd.valueInput.GetType() : pd.valueOutput.GetType();
+
+                if (pd.isInput)
+                {
+                    // Get Value input default value
+                    PropertyInfo defaultValuePI = t.GetProperty("_defaultValue", BindingFlags.NonPublic | BindingFlags.Instance);
+                    if (pd.valueInput.hasDefaultValue)
+                    {
+                        if (defaultValuePI != null)
+                        {
+                            try
+                            {
+                                var value = defaultValuePI.GetValue(pd.valueInput);
+                                pd.inputValue = value;
+                                if (string.IsNullOrEmpty(filter) || (value != null && value.ToString().IndexOf(filter, System.StringComparison.OrdinalIgnoreCase) >= 0))
+                                {
+                                    AddSearchResult(ud, i);
+                                }
+                            }
+                            catch (System.Exception e)
+                            {
+                                Debug.LogException(e, ud.monoBehaviour);
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    // Get Value output value (function)
+                    FieldInfo getValueFI = t.GetField("getValue", BindingFlags.NonPublic | BindingFlags.Instance);
+                    if (getValueFI != null)
+                    {
+                        var getValueFunc = (System.Func<Flow, System.Object>)getValueFI.GetValue(pd.valueOutput);
+                        var obj = getValueFunc.Target;
+                        if (obj.GetType() == typeof(Literal))
+                        {
+                            var literal = obj as Literal;
+                            var value = literal.value;
+                            pd.outputValue = value;
+                            if (string.IsNullOrEmpty(filter) || value.ToString().IndexOf(filter, System.StringComparison.OrdinalIgnoreCase) >= 0)
+                            {
+                                AddSearchResult(ud, i);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    #endregion
+
     private void OnGUI()
     {
-        targetMonoBehaviour = (MonoBehaviour)EditorGUILayout.ObjectField(targetMonoBehaviour, typeof(MonoBehaviour), true);
         EditorGUILayout.LabelField("Unit Count = " + unitList.Count);
         EditorGUILayout.LabelField("MonoBehaviour Count = " + monoBehaviourList.Count);
 
         mode = (Mode)EditorGUILayout.EnumPopup(mode);
-        searchTarget = (SearchTarget)EditorGUILayout.EnumPopup(searchTarget);
 
         if (GUILayout.Button("Collect"))
         {
             unitList.Clear();
             monoBehaviourList.Clear();
-            if (targetMonoBehaviour)
-            {
-                Collect(targetMonoBehaviour);
-            }
-            else
-            {
-                Collect();
-            }
+            searchResultMap.Clear();
+            Collect();
+            Search();
         }
 
-        filter = EditorGUILayout.TextField("Filter", filter);
-
-        if (GUILayout.Button("Search"))
+        EditorGUI.BeginChangeCheck();
+        filter = EditorGUILayout.DelayedTextField("Filter", filter);
+        if (EditorGUI.EndChangeCheck())
         {
-            n.ResetPage();
-
-            searchResultList.Clear();
-            foreach (UnitData ud in unitList)
-            {
-                // Match unit name
-                var collectAllName = ud.unit.ToString();
-                var unitType = ud.unit.GetType();
-                var ta = unitType.GetAttribute<UnitShortTitleAttribute>();
-                if (ta != null)
-                {
-                    collectAllName += ta.title.Replace(" ", string.Empty);
-                }
-                var sta = unitType.GetAttribute<UnitTitleAttribute>();
-                if (sta != null)
-                {
-                    collectAllName += sta.title.Replace(" ", string.Empty);
-                }
-                if (unitType == typeof(SuperUnit))
-                {
-                }
-                if (collectAllName.IndexOf(filter.Replace(" ", string.Empty), System.StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    var sr = new SearchResult() { unitData = ud };
-                    searchResultList.Add(sr);
-                }
-
-                for (int i = 0; i < ud.portDatas.Count; i++)
-                {
-                    var pd = ud.portDatas[i];
-
-                    var t = pd.isInput ? pd.valueInput.GetType() : pd.valueOutput.GetType();
-
-                    if (pd.isInput)
-                    {
-                        // Get Value input default value
-                        PropertyInfo defaultValuePI = t.GetProperty("_defaultValue", BindingFlags.NonPublic | BindingFlags.Instance);
-                        if (pd.valueInput.hasDefaultValue)
-                        {
-                            if (defaultValuePI != null)
-                            {
-                                try
-                                {
-                                    var value = defaultValuePI.GetValue(pd.valueInput);
-                                    pd.inputValue = value;
-                                    if (string.IsNullOrEmpty(filter) || (value != null && value.ToString().IndexOf(filter, System.StringComparison.OrdinalIgnoreCase) >= 0))
-                                    {
-                                        var sr = new SearchResult()
-                                        {
-                                            unitData = ud,
-                                            portIndex = i
-                                        };
-                                        searchResultList.Add(sr);
-                                    }
-                                }
-                                catch (System.Exception e)
-                                {
-                                    Debug.LogException(e, ud.monoBehaviour);
-                                }
-                            }
-                        }
-                    }
-                    else
-                    {
-                        // Get Value output value (function)
-                        FieldInfo getValueFI = t.GetField("getValue", BindingFlags.NonPublic | BindingFlags.Instance);
-                        if (getValueFI != null)
-                        {
-                            var getValueFunc = (System.Func<Flow, System.Object>)getValueFI.GetValue(pd.valueOutput);
-                            var obj = getValueFunc.Target;
-                            if (obj.GetType() == typeof(Literal))
-                            {
-                                var literal = obj as Literal;
-                                var value = literal.value;
-                                pd.outputValue = value;
-                                if (string.IsNullOrEmpty(filter) || value.ToString().IndexOf(filter, System.StringComparison.OrdinalIgnoreCase) >= 0)
-                                {
-                                    var sr = new SearchResult()
-                                    {
-                                        unitData = ud,
-                                        portIndex = i
-                                    };
-                                    searchResultList.Add(sr);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            Search();
         }
 
         // Navigation
@@ -403,26 +487,35 @@ public class BoltExplorer : EditorWindow
 
         scrollPosition = EditorGUILayout.BeginScrollView(scrollPosition);
 
-        foreach (var sr in searchResultList)
+        foreach (var kvp in searchResultMap)
         {
+            var sr = kvp.Value;
+
             // Navigation
             if (!n.CheckNavigation())
             {
                 continue;
             }
 
-            EditorGUILayout.BeginHorizontal();
-            var fm = sr.unitData.monoBehaviour;
+            var mb = sr.unitData.monoBehaviour;
             var unit = sr.unitData.unit;
             var graph = sr.unitData.flowGraph;
             var flowMacro = sr.unitData.flowMacro;
 
+            EditorGUILayout.BeginHorizontal();
             EditorGUILayout.LabelField(sr.unitData.hierachy);
-            EditorGUILayout.ObjectField(fm, typeof(FlowMachine), true);
-            if (GUILayout.Button("Focus"))
+            if (mb)
             {
-                if (fm)
-                    Selection.activeObject = fm;
+                EditorGUILayout.ObjectField(mb, typeof(MonoBehaviour), true);
+            }
+            if (flowMacro)
+            {
+                EditorGUILayout.ObjectField(flowMacro, typeof(FlowMacro), true);
+            }
+            if (GUILayout.Button(unit.ToSafeString()))
+            {
+                if (mb)
+                    Selection.activeObject = mb;
 
                 if (flowMacro.IsUnityNull())
                 {
@@ -434,7 +527,6 @@ public class BoltExplorer : EditorWindow
                     {
                         var nesterUnit = unit as SuperUnit;
                         var graphRef = GraphReference.New(flowMacro, true);
-                        //GraphWindow.OpenActive(graphRef);
                         var childGraphRef = graphRef.ChildReference(nesterUnit, false);
                         GraphWindow.OpenTab(childGraphRef);
                     }
@@ -445,15 +537,31 @@ public class BoltExplorer : EditorWindow
                 }
                 graph.pan = unit.position;
             }
-
-            var pd = sr.portIndex >= 0 ? sr.unitData.portDatas[sr.portIndex] : null;
-            if (pd != null)
-            {
-                var portName = pd.isInput ? "> " + pd.valueInput.key : "< " + pd.valueOutput.key;
-                var valueContent = pd.isInput ? pd.inputValue as string : pd.outputValue as string;
-                EditorGUILayout.LabelField(string.Format("{0} = {1}", portName, valueContent));
-            }
             EditorGUILayout.EndHorizontal();
+
+            // Matched ports
+            EditorGUILayout.BeginVertical();
+            foreach (var idx in sr.matchPorts)
+            {
+                var pd = idx >= 0 ? sr.unitData.portDatas[idx] : null;
+                if (pd != null)
+                {
+                    var portName = pd.isInput ? pd.valueInput.key : pd.valueOutput.key;
+                    if (pd.pi != null)
+                    {
+                        var pl = pd.pi.GetCustomAttribute<PortLabelAttribute>();
+                        if (pl != null)
+                            portName = pl.label;
+                    }
+                    var valueContent = pd.isInput ? pd.inputValue as string : pd.outputValue as string;
+
+                    EditorGUILayout.BeginHorizontal();
+                    EditorGUILayout.LabelField((pd.isInput? "[IN]": "[OUT]") + $" {portName}", GUILayout.Width(200));
+                    EditorGUILayout.TextField(valueContent);
+                    EditorGUILayout.EndHorizontal();
+                }
+            }
+            EditorGUILayout.EndVertical();
         }
 
         EditorGUILayout.EndScrollView();

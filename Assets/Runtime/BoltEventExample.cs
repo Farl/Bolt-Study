@@ -8,7 +8,7 @@ using System;
 namespace SS
 {
     [UnitCategory("SS")]
-    [UnitTitle("Bolt Event Example")]
+    [UnitTitle("Bolt Event Example EX")]
     [UnitShortTitle("Bolt Event Example")]
     [SpecialUnit]
     public sealed class BoltEventExample : Bolt.Unit, Bolt.IEventUnit
@@ -16,6 +16,9 @@ namespace SS
         [DoNotSerialize]
         [PortLabel("Control Output")]
         public ControlOutput controlOutput;
+
+        [DoNotSerialize, PortLabel("ASDF")]
+        public ValueInput valueInput { get; private set; }
 
         [Serialize]
         [Inspectable]
@@ -97,6 +100,7 @@ namespace SS
         {
             Debug.Log("Definition");
             controlOutput = ControlOutput(nameof(controlOutput));
+            valueInput = ValueInput<string>(nameof(valueInput), default);
         }
     }
 }
