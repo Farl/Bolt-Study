@@ -20,6 +20,12 @@ namespace SS
         [DoNotSerialize, PortLabel("ASDF")]
         public ValueInput valueInput { get; private set; }
 
+        [Inspectable]
+        public string testStr;
+
+        [UnitHeaderInspectable("TEST")]
+        public string testStrHeader;
+
         [Serialize]
         [Inspectable]
         [InspectorExpandTooltip]

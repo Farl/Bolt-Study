@@ -99,6 +99,7 @@ public class BoltExplorer : EditorWindow
         public FlowMacro flowMacro;
         public FlowGraph flowGraph;
         public IUnit unit;
+        public SuperUnit superUnit;
 
         public List<PortData> portDatas = new List<PortData>();
     }
@@ -111,6 +112,11 @@ public class BoltExplorer : EditorWindow
         public object inputValue;
         public ValueOutput valueOutput;
         public object outputValue;
+
+        public FieldInfo fi;
+        public object target;
+
+        public ValueInputDefinition vid;
     }
 
     private class SearchResult
@@ -222,7 +228,7 @@ public class BoltExplorer : EditorWindow
         }
     }
 
-    void Collect(FlowGraph graph, MonoBehaviour mb, FlowMacro flowMacro, string hierachy)
+    void Collect(FlowGraph graph, MonoBehaviour mb, FlowMacro flowMacro, string hierachy, SuperUnit inSuperUnit = null)
     {
         if (graph.IsUnityNull())
             return;
@@ -236,7 +242,8 @@ public class BoltExplorer : EditorWindow
                 flowMacro = flowMacro,
                 monoBehaviour = mb,
                 hierachy = hierachy,
-                scene = (mb != null) ? mb.gameObject.scene : new Scene()
+                scene = (mb != null) ? mb.gameObject.scene : new Scene(),
+                superUnit = inSuperUnit
             };
             unitList.Add(unitData);
 
@@ -245,7 +252,25 @@ public class BoltExplorer : EditorWindow
             {
                 var superUnit = unit as SuperUnit;
                 if (superUnit != null && superUnit.nest.graph != graph)
-                    Collect(superUnit.nest.graph, mb, flowMacro, hierachy + "/" + superUnit.ToString());
+                {
+                    // Collect recursive
+                    Collect(superUnit.nest.graph, mb, flowMacro, hierachy + "/" + superUnit.ToString(), (inSuperUnit.IsUnityNull() ? superUnit : inSuperUnit));
+
+                    // SuperUnit input (default value)
+                    foreach (var vid in superUnit.nest.graph.valueInputDefinitions)
+                    {
+                        if (vid.type == typeof(string) && vid.hasDefaultValue)
+                        {
+                            // Collect
+                            var portData = new PortData()
+                            {
+                                vid = vid
+                            };
+                            unitData.portDatas.Add(portData);
+                        }
+                    }
+                }
+
             }
 
             var unitType = unit.GetType();
@@ -290,51 +315,20 @@ public class BoltExplorer : EditorWindow
             {
                 if (fi.FieldType == typeof(string))
                 {
-
-                }
-            }
-            /*
-            foreach (var input in unit.inputs)
-            {
-                var valueInput = input as ValueInput;
-                if (valueInput != null)
-                {
-                    var t = valueInput.type;
-
-                    // Collect string type only
-                    if (t == typeof(string))
+                    var ins = fi.GetCustomAttribute<InspectableAttribute>();
+                    var head = fi.GetCustomAttribute<UnitHeaderInspectableAttribute>();
+                    if (ins != null || head != null)
                     {
                         // Collect!
                         var portData = new PortData()
                         {
-                            isInput = true,
-                            valueInput = valueInput,
+                            fi = fi,
+                            target = unit
                         };
                         unitData.portDatas.Add(portData);
                     }
                 }
             }
-            foreach (var output in unit.outputs)
-            {
-                var valueOutput = output as ValueOutput;
-                if (valueOutput != null)
-                {
-                    var t = valueOutput.type;
-
-                    // Collect string type only
-                    if (t == typeof(string))
-                    {
-                        // Collect!
-                        var portData = new PortData()
-                        {
-                            isInput = false,
-                            valueOutput = valueOutput,
-                        };
-                        unitData.portDatas.Add(portData);
-                    }
-                }
-            }
-            */
         }
     }
     #endregion
@@ -407,10 +401,29 @@ public class BoltExplorer : EditorWindow
             {
                 var pd = ud.portDatas[i];
 
-                var t = pd.isInput ? pd.valueInput.GetType() : pd.valueOutput.GetType();
-
-                if (pd.isInput)
+                if (!pd.vid.IsUnityNull())
                 {
+                    var su = unit as SuperUnit;
+                    if (su.defaultValues.TryGetValue(pd.vid.key, out object value))
+                    {
+                        if (string.IsNullOrEmpty(filter) || (value != null && value.ToString().IndexOf(filter, System.StringComparison.OrdinalIgnoreCase) >= 0))
+                        {
+                            AddSearchResult(ud, i);
+                        }
+                    }
+                }
+                else if (pd.fi != null)
+                {
+                    var value = pd.fi.GetValue(unit);
+                    if (string.IsNullOrEmpty(filter) || (value != null && value.ToString().IndexOf(filter, System.StringComparison.OrdinalIgnoreCase) >= 0))
+                    {
+                        AddSearchResult(ud, i);
+                    }
+                }
+                else if (pd.isInput)
+                {
+                    var t = pd.isInput ? pd.valueInput.GetType() : pd.valueOutput.GetType();
+
                     // Get Value input default value
                     PropertyInfo defaultValuePI = t.GetProperty("_defaultValue", BindingFlags.NonPublic | BindingFlags.Instance);
                     if (pd.valueInput.hasDefaultValue)
@@ -435,6 +448,8 @@ public class BoltExplorer : EditorWindow
                 }
                 else
                 {
+                    var t = pd.isInput ? pd.valueInput.GetType() : pd.valueOutput.GetType();
+
                     // Get Value output value (function)
                     FieldInfo getValueFI = t.GetField("getValue", BindingFlags.NonPublic | BindingFlags.Instance);
                     if (getValueFI != null)
@@ -458,8 +473,16 @@ public class BoltExplorer : EditorWindow
     }
     #endregion
 
+    static GUIStyle hierachyStyle;
+
     private void OnGUI()
     {
+        if (hierachyStyle == null)
+        {
+            hierachyStyle = new GUIStyle();
+            hierachyStyle.fontSize = 10;
+
+        }
         EditorGUILayout.LabelField("Unit Count = " + unitList.Count);
         EditorGUILayout.LabelField("MonoBehaviour Count = " + monoBehaviourList.Count);
 
@@ -484,6 +507,7 @@ public class BoltExplorer : EditorWindow
         // Navigation
         n.pageLimit = EditorGUILayout.IntField("Page Limit", n.pageLimit);
         n.StartNavigation();
+        GUILayout.Box("", GUILayout.ExpandWidth(true), GUILayout.Height(4));
 
         scrollPosition = EditorGUILayout.BeginScrollView(scrollPosition);
 
@@ -497,22 +521,15 @@ public class BoltExplorer : EditorWindow
                 continue;
             }
 
-            var mb = sr.unitData.monoBehaviour;
-            var unit = sr.unitData.unit;
-            var graph = sr.unitData.flowGraph;
-            var flowMacro = sr.unitData.flowMacro;
+            var unitData = sr.unitData;
+            var mb = unitData.monoBehaviour;
+            var unit = unitData.unit;
+            var graph = unitData.flowGraph;
+            var flowMacro = unitData.flowMacro;
 
+            EditorGUILayout.LabelField(sr.unitData.hierachy, hierachyStyle);
             EditorGUILayout.BeginHorizontal();
-            EditorGUILayout.LabelField(sr.unitData.hierachy);
-            if (mb)
-            {
-                EditorGUILayout.ObjectField(mb, typeof(MonoBehaviour), true);
-            }
-            if (flowMacro)
-            {
-                EditorGUILayout.ObjectField(flowMacro, typeof(FlowMacro), true);
-            }
-            if (GUILayout.Button(unit.ToSafeString()))
+            if (GUILayout.Button(unit.ToSafeString(), GUILayout.Width(200)))
             {
                 if (mb)
                     Selection.activeObject = mb;
@@ -523,11 +540,10 @@ public class BoltExplorer : EditorWindow
                 }
                 else
                 {
-                    if (unit.GetType() == typeof(SuperUnit))
+                    if (!unitData.superUnit.IsUnityNull())
                     {
-                        var nesterUnit = unit as SuperUnit;
                         var graphRef = GraphReference.New(flowMacro, true);
-                        var childGraphRef = graphRef.ChildReference(nesterUnit, false);
+                        var childGraphRef = graphRef.ChildReference(unitData.superUnit, false);
                         GraphWindow.OpenTab(childGraphRef);
                     }
                     else
@@ -536,6 +552,14 @@ public class BoltExplorer : EditorWindow
                     }
                 }
                 graph.pan = unit.position;
+            }
+            if (mb)
+            {
+                EditorGUILayout.ObjectField(mb, typeof(MonoBehaviour), true, GUILayout.Width(150));
+            }
+            if (flowMacro)
+            {
+                EditorGUILayout.ObjectField(flowMacro, typeof(FlowMacro), true, GUILayout.Width(150));
             }
             EditorGUILayout.EndHorizontal();
 
@@ -546,21 +570,43 @@ public class BoltExplorer : EditorWindow
                 var pd = idx >= 0 ? sr.unitData.portDatas[idx] : null;
                 if (pd != null)
                 {
-                    var portName = pd.isInput ? pd.valueInput.key : pd.valueOutput.key;
-                    if (pd.pi != null)
+                    var portName = "";
+                    string valueContent = string.Empty;
+
+                    if (!pd.vid.IsUnityNull())
                     {
-                        var pl = pd.pi.GetCustomAttribute<PortLabelAttribute>();
-                        if (pl != null)
-                            portName = pl.label;
+                        portName = string.IsNullOrEmpty(pd.vid.label)? pd.vid.key: pd.vid.label;
+                        var su = unit as SuperUnit;
+                        if (su.defaultValues.TryGetValue(pd.vid.key, out object dv))
+                        {
+                            valueContent = dv as string;
+                        }
                     }
-                    var valueContent = pd.isInput ? pd.inputValue as string : pd.outputValue as string;
+                    else if (pd.fi != null)
+                    {
+                        portName = pd.fi.DisplayName();
+                        valueContent = pd.fi.GetValue(pd.target) as string;
+                    }
+                    else
+                    {
+                        portName = pd.isInput ? pd.valueInput.key : pd.valueOutput.key;
+                        if (pd.pi != null)
+                        {
+                            var pl = pd.pi.GetCustomAttribute<PortLabelAttribute>();
+                            if (pl != null)
+                                portName = pl.label;
+                        }
+                        valueContent = pd.isInput ? pd.inputValue as string : pd.outputValue as string;
+                    }
 
                     EditorGUILayout.BeginHorizontal();
-                    EditorGUILayout.LabelField((pd.isInput? "[IN]": "[OUT]") + $" {portName}", GUILayout.Width(200));
-                    EditorGUILayout.TextField(valueContent);
+                    EditorGUILayout.LabelField((pd.isInput? "[IN]": "[OUT]") + $" {portName}", GUILayout.Width(150));
+                    EditorGUILayout.TextField(valueContent, GUILayout.Width(200));
                     EditorGUILayout.EndHorizontal();
                 }
             }
+
+            GUILayout.Box("", GUILayout.ExpandWidth(true), GUILayout.Height(4));
             EditorGUILayout.EndVertical();
         }
 
