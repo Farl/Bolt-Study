@@ -16,11 +16,80 @@ public class BoltExplorer : EditorWindow
         var window = EditorWindow.CreateWindow<BoltExplorer>();
     }
 
+    private class Navigation
+    {
+        public int pageLimit = 50;
+        private int currPage = 0;
+        private int refCount = 0;
+
+        public void ResetPage()
+        {
+            currPage = 0;
+        }
+
+        public void StartNavigation()
+        {
+            refCount = 0;
+        }
+
+        public bool CheckNavigation()
+        {
+            if (refCount < currPage * pageLimit || refCount >= (currPage + 1) * pageLimit)
+            {
+                refCount++;
+                return false;
+            }
+            else
+            {
+                refCount++;
+                return true;
+            }
+        }
+
+        public void EndNavigation()
+        {
+            EditorGUILayout.BeginHorizontal();
+            {
+                if (GUILayout.Button("|<"))
+                {
+                    currPage = 0;
+                }
+                if (GUILayout.Button("<"))
+                {
+                    if (currPage <= 0)
+                    {
+                        currPage = 0;
+                    }
+                    else
+                    {
+                        currPage--;
+                    }
+                }
+                EditorGUILayout.LabelField(string.Format("Page = {0} / {1}", currPage + 1, 1 + (refCount - 1) / pageLimit));
+                if (GUILayout.Button(">"))
+                {
+                    if (currPage >= (refCount - 1) / pageLimit)
+                    {
+                        currPage = ((refCount - 1) / pageLimit);
+                    }
+                    else
+                    {
+                        currPage++;
+                    }
+                }
+                if (GUILayout.Button(">|"))
+                {
+                    currPage = ((refCount - 1) / pageLimit);
+                }
+            }
+            EditorGUILayout.EndHorizontal();
+        }
+    }
+
     static MonoBehaviour targetMonoBehaviour;
     static MonoBehaviour[] monoBehaviours;
     static string filter = string.Empty;
-    static int pageLimit = 50;
-    static int currPage = 0;
+    static Navigation n = new Navigation();
 
     private class UnitData
     {
@@ -60,15 +129,36 @@ public class BoltExplorer : EditorWindow
     }
     static Mode mode = Mode.Scene;
 
+    private enum SearchTarget
+    {
+        GameObject = 0,
+        FlowMacro = 1,
+    }
+    static SearchTarget searchTarget = SearchTarget.GameObject;
+
     void Collect()
     {
-        GameObject[] gos = Resources.FindObjectsOfTypeAll<GameObject>();
-        foreach (var go in gos)
+        if (searchTarget == SearchTarget.GameObject)
         {
-            if ((mode == Mode.Scene) == go.scene.IsValid())
+            GameObject[] gos = Resources.FindObjectsOfTypeAll<GameObject>();
+            foreach (var go in gos)
             {
-                var fms = go.GetComponentsInChildren<MonoBehaviour>();
-                Collect(fms);
+                if ((mode == Mode.Scene) == go.scene.IsValid())
+                {
+                    var fms = go.GetComponentsInChildren<MonoBehaviour>();
+                    Collect(fms);
+                }
+            }
+        }
+        else
+        {
+            var guids = AssetDatabase.FindAssets("t:FlowMacro");
+            foreach (var guid in guids)
+            {
+                var assetPath = AssetDatabase.GUIDToAssetPath(guid);
+                var flowMacro = AssetDatabase.LoadAssetAtPath<FlowMacro>(assetPath);
+                if (flowMacro)
+                    Collect(flowMacro.graph, null, flowMacro, assetPath);
             }
         }
     }
@@ -133,7 +223,7 @@ public class BoltExplorer : EditorWindow
                 flowMacro = flowMacro,
                 monoBehaviour = mb,
                 hierachy = hierachy,
-                scene = mb.gameObject.scene
+                scene = (mb != null)? mb.gameObject.scene: new Scene()
             };
             unitList.Add(unitData);
 
@@ -191,96 +281,66 @@ public class BoltExplorer : EditorWindow
 
     private void OnGUI()
     {
+        targetMonoBehaviour = (MonoBehaviour)EditorGUILayout.ObjectField(targetMonoBehaviour, typeof(MonoBehaviour), true);
+        EditorGUILayout.LabelField("Unit Count = " + unitList.Count);
+        EditorGUILayout.LabelField("MonoBehaviour Count = " + monoBehaviourList.Count);
 
-        scrollPosition = EditorGUILayout.BeginScrollView(scrollPosition);
+        mode = (Mode)EditorGUILayout.EnumPopup(mode);
+        searchTarget = (SearchTarget)EditorGUILayout.EnumPopup(searchTarget);
+
+        if (GUILayout.Button("Collect"))
         {
-            targetMonoBehaviour = (FlowMachine)EditorGUILayout.ObjectField(targetMonoBehaviour, typeof(FlowMachine), true);
-            EditorGUILayout.LabelField("Unit Count = " + unitList.Count);
-            EditorGUILayout.LabelField("MonoBehaviour Count = " + monoBehaviourList.Count);
-
-            mode = (Mode)EditorGUILayout.EnumPopup(mode);
-
-            if (GUILayout.Button("Collect"))
+            unitList.Clear();
+            monoBehaviourList.Clear();
+            if (targetMonoBehaviour)
             {
-                unitList.Clear();
-                monoBehaviourList.Clear();
-                if (targetMonoBehaviour)
-                {
-                    Collect(targetMonoBehaviour);
-                }
-                else
-                {
-                    Collect();
-                }
+                Collect(targetMonoBehaviour);
             }
-
-            filter = EditorGUILayout.TextField("Filter", filter);
-
-            if (GUILayout.Button("Search"))
+            else
             {
-                searchResultList.Clear();
-                foreach (UnitData ud in unitList)
+                Collect();
+            }
+        }
+
+        filter = EditorGUILayout.TextField("Filter", filter);
+
+        if (GUILayout.Button("Search"))
+        {
+            n.ResetPage();
+
+            searchResultList.Clear();
+            foreach (UnitData ud in unitList)
+            {
+
+                // Match unit name
+                if (ud.unit.ToString().IndexOf(filter.Replace(" ", string.Empty), System.StringComparison.OrdinalIgnoreCase) >= 0)
                 {
-
-                    // Match unit name
-                    if (ud.unit.ToString().IndexOf(filter.Replace(" ", string.Empty), System.StringComparison.OrdinalIgnoreCase) >= 0)
+                    var sr = new SearchResult()
                     {
-                        var sr = new SearchResult()
-                        {
-                            unitData = ud
-                        };
-                        searchResultList.Add(sr);
-                    }
+                        unitData = ud
+                    };
+                    searchResultList.Add(sr);
+                }
 
-                    for (int i = 0; i < ud.portDatas.Count; i++)
+                for (int i = 0; i < ud.portDatas.Count; i++)
+                {
+                    var pd = ud.portDatas[i];
+
+                    var t = pd.isInput ? pd.valueInput.GetType() : pd.valueOutput.GetType();
+
+                    if (pd.isInput)
                     {
-                        var pd = ud.portDatas[i];
-
-                        var t = pd.isInput ? pd.valueInput.GetType() : pd.valueOutput.GetType();
-
-                        if (pd.isInput)
+                        // Get Value input default value
+                        PropertyInfo defaultValuePI = t.GetProperty("_defaultValue", BindingFlags.NonPublic | BindingFlags.Instance);
+                        if (pd.valueInput.hasDefaultValue)
                         {
-                            // Get Value input default value
-                            PropertyInfo defaultValuePI = t.GetProperty("_defaultValue", BindingFlags.NonPublic | BindingFlags.Instance);
-                            if (pd.valueInput.hasDefaultValue)
+                            if (defaultValuePI != null)
                             {
-                                if (defaultValuePI != null)
+                                try
                                 {
-                                    try
-                                    {
-                                        var value = defaultValuePI.GetValue(pd.valueInput);
-                                        pd.inputValue = value;
-                                        if (string.IsNullOrEmpty(filter) || (value != null && value.ToString().IndexOf(filter, System.StringComparison.OrdinalIgnoreCase) >= 0))
-                                        {
-                                            var sr = new SearchResult()
-                                            {
-                                                unitData = ud,
-                                                portIndex = i
-                                            };
-                                            searchResultList.Add(sr);
-                                        }
-                                    }
-                                    catch (System.Exception e)
-                                    {
-                                        Debug.LogException(e, ud.monoBehaviour);
-                                    }
-                                }
-                            }
-                        }
-                        else
-                        {
-                            // Get Value output value (function)
-                            FieldInfo getValueFI = t.GetField("getValue", BindingFlags.NonPublic | BindingFlags.Instance);
-                            if (getValueFI != null)
-                            {
-                                var getValueFunc = (System.Func<Flow, System.Object>)getValueFI.GetValue(pd.valueOutput);
-                                var obj = getValueFunc.Target;
-                                if (obj.GetType() == typeof(Literal))
-                                {
-                                    var literal = obj as Literal;
-                                    var value = literal.value;
-                                    pd.outputValue = value;
-                                    if (string.IsNullOrEmpty(filter) || value.ToString().IndexOf(filter, System.StringComparison.OrdinalIgnoreCase) >= 0)
+                                    var value = defaultValuePI.GetValue(pd.valueInput);
+                                    pd.inputValue = value;
+                                    if (string.IsNullOrEmpty(filter) || (value != null && value.ToString().IndexOf(filter, System.StringComparison.OrdinalIgnoreCase) >= 0))
                                     {
                                         var sr = new SearchResult()
                                         {
@@ -290,91 +350,96 @@ public class BoltExplorer : EditorWindow
                                         searchResultList.Add(sr);
                                     }
                                 }
+                                catch (System.Exception e)
+                                {
+                                    Debug.LogException(e, ud.monoBehaviour);
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // Get Value output value (function)
+                        FieldInfo getValueFI = t.GetField("getValue", BindingFlags.NonPublic | BindingFlags.Instance);
+                        if (getValueFI != null)
+                        {
+                            var getValueFunc = (System.Func<Flow, System.Object>)getValueFI.GetValue(pd.valueOutput);
+                            var obj = getValueFunc.Target;
+                            if (obj.GetType() == typeof(Literal))
+                            {
+                                var literal = obj as Literal;
+                                var value = literal.value;
+                                pd.outputValue = value;
+                                if (string.IsNullOrEmpty(filter) || value.ToString().IndexOf(filter, System.StringComparison.OrdinalIgnoreCase) >= 0)
+                                {
+                                    var sr = new SearchResult()
+                                    {
+                                        unitData = ud,
+                                        portIndex = i
+                                    };
+                                    searchResultList.Add(sr);
+                                }
                             }
                         }
                     }
                 }
             }
+        }
 
-            pageLimit = EditorGUILayout.IntField("Page Limit", pageLimit);
-            int refCount = 0;
+        // Navigation
+        n.pageLimit = EditorGUILayout.IntField("Page Limit", n.pageLimit);
+        n.StartNavigation();
 
-            foreach (var sr in searchResultList)
+        scrollPosition = EditorGUILayout.BeginScrollView(scrollPosition);
+
+        foreach (var sr in searchResultList)
+        {
+            // Navigation
+            if (!n.CheckNavigation())
             {
-                if (refCount < currPage * pageLimit || refCount >= (currPage + 1) * pageLimit)
-                {
-                    refCount++;
-                    continue;
-                }
-                else
-                {
-                    refCount++;
-                }
-
-                EditorGUILayout.BeginHorizontal();
-                var fm = sr.unitData.monoBehaviour;
-                var unit = sr.unitData.unit;
-                var graph = sr.unitData.flowGraph;
-                var flowMacro = sr.unitData.flowMacro;
-
-                EditorGUILayout.LabelField(sr.unitData.hierachy);
-                EditorGUILayout.ObjectField(fm, typeof(FlowMachine), true);
-                if (GUILayout.Button("Focus"))
-                {
-                    //var gw = EditorWindow.GetWindow<Ludiq.GraphWindow>();
-                    Selection.activeObject = fm;
-                    GraphWindow.OpenActive(GraphReference.New(flowMacro, true));
-                    graph.pan = unit.position;
-                }
-
-                var pd = sr.portIndex >= 0 ? sr.unitData.portDatas[sr.portIndex] : null;
-                if (pd != null)
-                {
-                    var portName = pd.isInput ? "> " + pd.valueInput.key : "< " + pd.valueOutput.key;
-                    var valueContent = pd.isInput ? pd.inputValue as string : pd.outputValue as string;
-                    EditorGUILayout.LabelField(string.Format("{0} = {1}", portName, valueContent));
-                }
-                EditorGUILayout.EndHorizontal();
+                continue;
             }
 
             EditorGUILayout.BeginHorizontal();
+            var fm = sr.unitData.monoBehaviour;
+            var unit = sr.unitData.unit;
+            var graph = sr.unitData.flowGraph;
+            var flowMacro = sr.unitData.flowMacro;
+
+            EditorGUILayout.LabelField(sr.unitData.hierachy);
+            EditorGUILayout.ObjectField(fm, typeof(FlowMachine), true);
+            if (GUILayout.Button("Focus"))
             {
-                if (GUILayout.Button("|<"))
+                if (fm)
+                    Selection.activeObject = fm;
+                if (unit.GetType() == typeof(SuperUnit))
                 {
-                    currPage = 0;
+                    var nesterUnit = unit as SuperUnit;
+                    var graphRef = GraphReference.New(flowMacro, true);
+                    //GraphWindow.OpenActive(graphRef);
+                    var childGraphRef = graphRef.ChildReference(nesterUnit, false);
+                    GraphWindow.OpenTab(childGraphRef);
                 }
-                if (GUILayout.Button("<"))
+                else
                 {
-                    if (currPage <= 0)
-                    {
-                        currPage = 0;
-                    }
-                    else
-                    {
-                        currPage--;
-                    }
+                    GraphWindow.OpenActive(GraphReference.New(flowMacro, true));
                 }
-                EditorGUILayout.LabelField(string.Format("Page = {0} / {1}", currPage + 1, 1 + (refCount - 1) / pageLimit));
-                if (GUILayout.Button(">"))
-                {
-                    if (currPage >= (refCount - 1) / pageLimit)
-                    {
-                        currPage = ((refCount - 1) / pageLimit);
-                    }
-                    else
-                    {
-                        currPage++;
-                    }
-                }
-                if (GUILayout.Button(">|"))
-                {
-                    currPage = ((refCount - 1) / pageLimit);
-                }
+                graph.pan = unit.position;
+            }
+
+            var pd = sr.portIndex >= 0 ? sr.unitData.portDatas[sr.portIndex] : null;
+            if (pd != null)
+            {
+                var portName = pd.isInput ? "> " + pd.valueInput.key : "< " + pd.valueOutput.key;
+                var valueContent = pd.isInput ? pd.inputValue as string : pd.outputValue as string;
+                EditorGUILayout.LabelField(string.Format("{0} = {1}", portName, valueContent));
             }
             EditorGUILayout.EndHorizontal();
         }
 
-
         EditorGUILayout.EndScrollView();
+
+        // End Navigation
+        n.EndNavigation();
     }
 }
