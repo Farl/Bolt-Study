@@ -311,14 +311,25 @@ public class BoltExplorer : EditorWindow
             searchResultList.Clear();
             foreach (UnitData ud in unitList)
             {
-
                 // Match unit name
-                if (ud.unit.ToString().IndexOf(filter.Replace(" ", string.Empty), System.StringComparison.OrdinalIgnoreCase) >= 0)
+                var collectAllName = ud.unit.ToString();
+                var unitType = ud.unit.GetType();
+                var ta = unitType.GetAttribute<UnitShortTitleAttribute>();
+                if (ta != null)
                 {
-                    var sr = new SearchResult()
-                    {
-                        unitData = ud
-                    };
+                    collectAllName += ta.title.Replace(" ", string.Empty);
+                }
+                var sta = unitType.GetAttribute<UnitTitleAttribute>();
+                if (sta != null)
+                {
+                    collectAllName += sta.title.Replace(" ", string.Empty);
+                }
+                if (unitType == typeof(SuperUnit))
+                {
+                }
+                if (collectAllName.IndexOf(filter.Replace(" ", string.Empty), System.StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    var sr = new SearchResult() { unitData = ud };
                     searchResultList.Add(sr);
                 }
 
@@ -412,17 +423,25 @@ public class BoltExplorer : EditorWindow
             {
                 if (fm)
                     Selection.activeObject = fm;
-                if (unit.GetType() == typeof(SuperUnit))
+
+                if (flowMacro.IsUnityNull())
                 {
-                    var nesterUnit = unit as SuperUnit;
-                    var graphRef = GraphReference.New(flowMacro, true);
-                    //GraphWindow.OpenActive(graphRef);
-                    var childGraphRef = graphRef.ChildReference(nesterUnit, false);
-                    GraphWindow.OpenTab(childGraphRef);
+                    GraphWindow.OpenTab();
                 }
                 else
                 {
-                    GraphWindow.OpenActive(GraphReference.New(flowMacro, true));
+                    if (unit.GetType() == typeof(SuperUnit))
+                    {
+                        var nesterUnit = unit as SuperUnit;
+                        var graphRef = GraphReference.New(flowMacro, true);
+                        //GraphWindow.OpenActive(graphRef);
+                        var childGraphRef = graphRef.ChildReference(nesterUnit, false);
+                        GraphWindow.OpenTab(childGraphRef);
+                    }
+                    else
+                    {
+                        GraphWindow.OpenActive(GraphReference.New(flowMacro, true));
+                    }
                 }
                 graph.pan = unit.position;
             }
