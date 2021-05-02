@@ -22,6 +22,12 @@ public class BoltExplorer : EditorWindow
         private int currPage = 0;
         private int refCount = 0;
 
+        public int RefCount
+        {
+            get
+            { return refCount; }
+        }
+
         public void ResetPage()
         {
             currPage = 0;
@@ -48,6 +54,7 @@ public class BoltExplorer : EditorWindow
 
         public void EndNavigation()
         {
+            pageLimit = EditorGUILayout.IntField("Page Content Limit", pageLimit);
             EditorGUILayout.BeginHorizontal();
             {
                 if (GUILayout.Button("|<"))
@@ -86,15 +93,16 @@ public class BoltExplorer : EditorWindow
         }
     }
 
-    static MonoBehaviour targetMonoBehaviour;
-    static MonoBehaviour[] monoBehaviours;
     static string filter = string.Empty;
     static Navigation n = new Navigation();
 
     private class UnitData
     {
         public string hierachy;
-        public Scene scene;
+        public Scene? scene
+        {
+            get { return monoBehaviour?.gameObject?.scene; }
+        }
         public MonoBehaviour monoBehaviour;
         public FlowMacro flowMacro;
         public FlowGraph flowGraph;
@@ -102,21 +110,147 @@ public class BoltExplorer : EditorWindow
         public SuperUnit superUnit;
 
         public List<PortData> portDatas = new List<PortData>();
+
+        public void AddPortData(PropertyInfo pi, IUnitPort unitPort)
+        {
+            PortData pd = new PortData()
+            {
+                memberInfo = pi,
+                unitPort = unitPort
+            };
+            portDatas.Add(pd);
+        }
+
+        public void AddPortData(FieldInfo fi)
+        {
+            PortData pd = new PortData()
+            {
+                memberInfo = fi
+            };
+            portDatas.Add(pd);
+        }
+
+        public void AddPortData(ValueInputDefinition vid)
+        {
+            PortData pd = new PortData()
+            {
+                vid = vid
+            };
+            portDatas.Add(pd);
+        }
     }
 
     private class PortData
     {
-        public PropertyInfo pi;
-        public bool isInput;
-        public ValueInput valueInput;
-        public object inputValue;
-        public ValueOutput valueOutput;
-        public object outputValue;
-
-        public FieldInfo fi;
-        public object target;
 
         public ValueInputDefinition vid;
+        public MemberInfo memberInfo;
+        public IUnitPort unitPort;
+        public object valueCache;
+
+        public bool isInput
+        {
+            get
+            {
+                return !valueInput.IsUnityNull();
+            }
+        }
+        public ValueInput valueInput
+        {
+            get
+            {
+                return unitPort as ValueInput;
+            }
+        }
+        public ValueOutput valueOutput
+        {
+            get
+            {
+                return unitPort as ValueOutput;
+            }
+        }
+        public string GetPortName()
+        {
+            var portName = string.Empty;
+
+            if (!vid.IsUnityNull())
+            {
+                portName = string.IsNullOrEmpty(vid.label) ? vid.key : vid.label;
+            }
+            else if ((memberInfo as FieldInfo) != null)
+            {
+                portName = memberInfo.DisplayName();
+                var header = memberInfo.GetCustomAttribute<UnitHeaderInspectableAttribute>();
+                if (header != null && !string.IsNullOrEmpty(header.label))
+                    portName = header.label;
+
+            }
+            else if (memberInfo as PropertyInfo != null)
+            {
+                portName = memberInfo.DisplayName();
+                var pl = memberInfo.GetCustomAttribute<PortLabelAttribute>();
+                if (pl != null)
+                    portName = pl.label;
+            }
+            return portName;
+        }
+        public T GetValueCache<T>()
+        {
+            return (T)valueCache;
+        }
+        public T GetValue<T>(IUnit unit)
+        {
+            object value = null;
+            if (!vid.IsUnityNull())
+            {
+                var su = unit as SuperUnit;
+                su.defaultValues.TryGetValue(vid.key, out value);
+            }
+            else if ((memberInfo as FieldInfo) != null)
+            {
+                var fi = memberInfo as FieldInfo;
+                value = fi.GetValue(unit);
+            }
+            else if ((memberInfo as PropertyInfo) != null && isInput)
+            {
+                var valueInput = unitPort as ValueInput;
+                var t = typeof(ValueInput);
+
+                // Get Value input default value
+                PropertyInfo defaultValuePI = t.GetProperty("_defaultValue", BindingFlags.NonPublic | BindingFlags.Instance);
+                if (valueInput.hasDefaultValue && defaultValuePI != null)
+                {
+                    try
+                    {
+                        value = defaultValuePI.GetValue(valueInput);
+                    }
+                    catch (System.Exception e)
+                    {
+                        Debug.LogException(e);
+                    }
+                }
+            }
+            else if ((memberInfo as PropertyInfo) != null && !isInput)
+            {
+                var valueOutput = unitPort as ValueOutput;
+                var t = typeof(ValueOutput);
+
+                // Get Value output value (function)
+                FieldInfo getValueFI = t.GetField("getValue", BindingFlags.NonPublic | BindingFlags.Instance);
+                if (getValueFI != null)
+                {
+                    var getValueFunc = (System.Func<Flow, System.Object>)getValueFI.GetValue(valueOutput);
+                    var obj = getValueFunc.Target;
+                    if (obj.GetType() == typeof(Literal))
+                    {
+                        var literal = obj as Literal;
+                        value = literal.value;
+                    }
+                }
+            }
+            valueCache = value;
+            return (T)value;
+        }
     }
 
     private class SearchResult
@@ -139,7 +273,7 @@ public class BoltExplorer : EditorWindow
     static Mode mode = Mode.Scene;
 
     #region Collect
-    void Collect()
+    void Collect<T>()
     {
         switch (mode)
         {
@@ -150,8 +284,8 @@ public class BoltExplorer : EditorWindow
                 {
                     if ((mode == Mode.Scene) == go.scene.IsValid())
                     {
-                        var fms = go.GetComponentsInChildren<MonoBehaviour>(true);
-                        Collect(fms);
+                        var mbs = go.GetComponentsInChildren<MonoBehaviour>(true);
+                        Collect<T>(mbs);
                     }
                 }
                 break;
@@ -163,7 +297,7 @@ public class BoltExplorer : EditorWindow
                     var assetPath = AssetDatabase.GUIDToAssetPath(guid);
                     var flowMacro = AssetDatabase.LoadAssetAtPath<FlowMacro>(assetPath);
                     if (flowMacro)
-                        Collect(flowMacro.graph, null, flowMacro, assetPath);
+                        Collect<T>(flowMacro.graph, null, flowMacro, assetPath);
                 }
                 break;
 
@@ -171,8 +305,8 @@ public class BoltExplorer : EditorWindow
                 gos = Selection.gameObjects;
                 foreach (var go in gos)
                 {
-                    var fms = go.GetComponentsInChildren<MonoBehaviour>(true);
-                    Collect(fms);
+                    var mbs = go.GetComponentsInChildren<MonoBehaviour>(true);
+                    Collect<T>(mbs);
                 }
                 break;
             default:
@@ -180,22 +314,26 @@ public class BoltExplorer : EditorWindow
         }
     }
 
-    void Collect(MonoBehaviour[] mbs)
+    void Collect<T>(MonoBehaviour[] mbs)
     {
         if (mbs == null)
             return;
         foreach (var f in mbs)
         {
-            Collect(f);
+            Collect<T>(f);
         }
     }
 
-    void Collect(MonoBehaviour mb)
+    void Collect<T>(MonoBehaviour mb)
     {
         if (mb == null)
             return;
 
-        var hierachy = (mb.gameObject.scene.IsValid() ? mb.gameObject.scene.name : "[Prefab]") + "/" + mb.name;
+        var hierachy = (mb.gameObject.scene.IsValid() ? $@"<b>[Scene]</b> {mb.gameObject.scene.name} " : @" ");
+        if (mb != null)
+        {
+            hierachy += $@"<b>[GameObject]</b> {mb.name}";
+        }
 
         FlowGraph graph;
 
@@ -206,7 +344,7 @@ public class BoltExplorer : EditorWindow
         {
             var fm = mb as FlowMachine;
             graph = fm.graph;
-            Collect(graph, fm, fm.nest.macro, hierachy);
+            Collect<T>(graph, fm, fm.nest.macro, hierachy);
         }
         else
         {
@@ -220,15 +358,14 @@ public class BoltExplorer : EditorWindow
                     if (flowMacro != null && flowMacro.graph != null)
                     {
                         graph = flowMacro.graph;
-                        monoBehaviourList.Add(mb);
-                        Collect(graph, mb, flowMacro, hierachy);
+                        Collect<T>(graph, mb, flowMacro, hierachy);
                     }
                 }
             }
         }
     }
 
-    void Collect(FlowGraph graph, MonoBehaviour mb, FlowMacro flowMacro, string hierachy, SuperUnit inSuperUnit = null)
+    void Collect<T>(FlowGraph graph, MonoBehaviour mb, FlowMacro flowMacro, string hierachy, SuperUnit inSuperUnit = null)
     {
         if (graph.IsUnityNull())
             return;
@@ -242,7 +379,6 @@ public class BoltExplorer : EditorWindow
                 flowMacro = flowMacro,
                 monoBehaviour = mb,
                 hierachy = hierachy,
-                scene = (mb != null) ? mb.gameObject.scene : new Scene(),
                 superUnit = inSuperUnit
             };
             unitList.Add(unitData);
@@ -251,22 +387,21 @@ public class BoltExplorer : EditorWindow
             if (unit.GetType() == typeof(SuperUnit))
             {
                 var superUnit = unit as SuperUnit;
-                if (superUnit != null && superUnit.nest.graph != graph)
+                var nestGraph = superUnit.nest.graph;
+                if (!superUnit.IsUnityNull() && !nestGraph.IsUnityNull() && nestGraph != graph)
                 {
                     // Collect recursive
-                    Collect(superUnit.nest.graph, mb, flowMacro, hierachy + "/" + superUnit.ToString(), (inSuperUnit.IsUnityNull() ? superUnit : inSuperUnit));
+                    var superUnitName = (!string.IsNullOrEmpty(nestGraph.title)) ? nestGraph.title : superUnit.ToString();
+                    var newHierachy = $@"{hierachy} [<color=blue>{superUnitName}</color>]";
+                    Collect<T>(nestGraph, mb, flowMacro, newHierachy, superUnit);
 
                     // SuperUnit input (default value)
-                    foreach (var vid in superUnit.nest.graph.valueInputDefinitions)
+                    foreach (var vid in nestGraph.valueInputDefinitions)
                     {
-                        if (vid.type == typeof(string) && vid.hasDefaultValue)
+                        if (vid.type == typeof(T) && vid.hasDefaultValue)
                         {
                             // Collect
-                            var portData = new PortData()
-                            {
-                                vid = vid
-                            };
-                            unitData.portDatas.Add(portData);
+                            unitData.AddPortData(vid);
                         }
                     }
                 }
@@ -280,52 +415,36 @@ public class BoltExplorer : EditorWindow
                 if (pi.PropertyType == typeof(ValueInput))
                 {
                     ValueInput vi = pi.GetValue(unit) as ValueInput;
-                    // Collect string type only
-                    if (!vi.IsUnityNull() && vi.type == typeof(string))
+                    // Collect specify type only
+                    if (!vi.IsUnityNull() && vi.type == typeof(T))
                     {
                         // Collect!
-                        var portData = new PortData()
-                        {
-                            pi = pi,
-                            isInput = true,
-                            valueInput = vi,
-                        };
-                        unitData.portDatas.Add(portData);
+                        unitData.AddPortData(pi, vi);
                     }
                 }
                 else if (pi.PropertyType == typeof(ValueOutput))
                 {
                     ValueOutput vo = pi.GetValue(unit) as ValueOutput;
-                    // Collect string type only
-                    if (!vo.IsUnityNull() && vo.type == typeof(string))
+                    // Collect specify type only
+                    if (!vo.IsUnityNull() && vo.type == typeof(T))
                     {
                         // Collect!
-                        var portData = new PortData()
-                        {
-                            pi = pi,
-                            isInput = false,
-                            valueOutput = vo,
-                        };
-                        unitData.portDatas.Add(portData);
+                        unitData.AddPortData(pi, vo);
                     }
                 }
             }
             FieldInfo[] fis = unitType.GetFields(BindingFlags.Public | BindingFlags.Instance);
             foreach (var fi in fis)
             {
-                if (fi.FieldType == typeof(string))
+                // Collect specify type only
+                if (fi.FieldType == typeof(T))
                 {
                     var ins = fi.GetCustomAttribute<InspectableAttribute>();
                     var head = fi.GetCustomAttribute<UnitHeaderInspectableAttribute>();
                     if (ins != null || head != null)
                     {
                         // Collect!
-                        var portData = new PortData()
-                        {
-                            fi = fi,
-                            target = unit
-                        };
-                        unitData.portDatas.Add(portData);
+                        unitData.AddPortData(fi);
                     }
                 }
             }
@@ -365,7 +484,9 @@ public class BoltExplorer : EditorWindow
     private void Search()
     {
         n.ResetPage();
+        scrollPosition = Vector2.zero;
         searchResultMap.Clear();
+
         foreach (UnitData ud in unitList)
         {
             var unit = ud.unit;
@@ -401,72 +522,10 @@ public class BoltExplorer : EditorWindow
             {
                 var pd = ud.portDatas[i];
 
-                if (!pd.vid.IsUnityNull())
+                var value = pd.GetValue<string>(unit);
+                if (string.IsNullOrEmpty(filter) || (value != null && value.ToString().IndexOf(filter, System.StringComparison.OrdinalIgnoreCase) >= 0))
                 {
-                    var su = unit as SuperUnit;
-                    if (su.defaultValues.TryGetValue(pd.vid.key, out object value))
-                    {
-                        if (string.IsNullOrEmpty(filter) || (value != null && value.ToString().IndexOf(filter, System.StringComparison.OrdinalIgnoreCase) >= 0))
-                        {
-                            AddSearchResult(ud, i);
-                        }
-                    }
-                }
-                else if (pd.fi != null)
-                {
-                    var value = pd.fi.GetValue(unit);
-                    if (string.IsNullOrEmpty(filter) || (value != null && value.ToString().IndexOf(filter, System.StringComparison.OrdinalIgnoreCase) >= 0))
-                    {
-                        AddSearchResult(ud, i);
-                    }
-                }
-                else if (pd.isInput)
-                {
-                    var t = pd.isInput ? pd.valueInput.GetType() : pd.valueOutput.GetType();
-
-                    // Get Value input default value
-                    PropertyInfo defaultValuePI = t.GetProperty("_defaultValue", BindingFlags.NonPublic | BindingFlags.Instance);
-                    if (pd.valueInput.hasDefaultValue)
-                    {
-                        if (defaultValuePI != null)
-                        {
-                            try
-                            {
-                                var value = defaultValuePI.GetValue(pd.valueInput);
-                                pd.inputValue = value;
-                                if (string.IsNullOrEmpty(filter) || (value != null && value.ToString().IndexOf(filter, System.StringComparison.OrdinalIgnoreCase) >= 0))
-                                {
-                                    AddSearchResult(ud, i);
-                                }
-                            }
-                            catch (System.Exception e)
-                            {
-                                Debug.LogException(e, ud.monoBehaviour);
-                            }
-                        }
-                    }
-                }
-                else
-                {
-                    var t = pd.isInput ? pd.valueInput.GetType() : pd.valueOutput.GetType();
-
-                    // Get Value output value (function)
-                    FieldInfo getValueFI = t.GetField("getValue", BindingFlags.NonPublic | BindingFlags.Instance);
-                    if (getValueFI != null)
-                    {
-                        var getValueFunc = (System.Func<Flow, System.Object>)getValueFI.GetValue(pd.valueOutput);
-                        var obj = getValueFunc.Target;
-                        if (obj.GetType() == typeof(Literal))
-                        {
-                            var literal = obj as Literal;
-                            var value = literal.value;
-                            pd.outputValue = value;
-                            if (string.IsNullOrEmpty(filter) || value.ToString().IndexOf(filter, System.StringComparison.OrdinalIgnoreCase) >= 0)
-                            {
-                                AddSearchResult(ud, i);
-                            }
-                        }
-                    }
+                    AddSearchResult(ud, i);
                 }
             }
         }
@@ -480,32 +539,36 @@ public class BoltExplorer : EditorWindow
         if (hierachyStyle == null)
         {
             hierachyStyle = new GUIStyle();
-            hierachyStyle.fontSize = 10;
+            hierachyStyle.fontSize = 12;
 
         }
-        EditorGUILayout.LabelField("Unit Count = " + unitList.Count);
-        EditorGUILayout.LabelField("MonoBehaviour Count = " + monoBehaviourList.Count);
 
-        mode = (Mode)EditorGUILayout.EnumPopup(mode);
+        EditorGUILayout.BeginHorizontal();
+        mode = (Mode)EditorGUILayout.EnumPopup(mode, GUILayout.Width(100));
 
-        if (GUILayout.Button("Collect"))
+        if (GUILayout.Button("Collect", GUILayout.Width(100)))
         {
             unitList.Clear();
-            monoBehaviourList.Clear();
             searchResultMap.Clear();
-            Collect();
+            Collect<string>();
             Search();
         }
+        EditorGUILayout.EndHorizontal();
 
         EditorGUI.BeginChangeCheck();
-        filter = EditorGUILayout.DelayedTextField("Filter", filter);
+
+        EditorGUILayout.BeginHorizontal();
+        EditorGUILayout.LabelField("Filter", GUILayout.Width(100));
+        filter = EditorGUILayout.DelayedTextField(filter);
+        EditorGUILayout.EndHorizontal();
+
         if (EditorGUI.EndChangeCheck())
         {
             Search();
         }
+        EditorGUILayout.LabelField($@"Unit Count = {searchResultMap.Count} / {unitList.Count}");
 
         // Navigation
-        n.pageLimit = EditorGUILayout.IntField("Page Limit", n.pageLimit);
         n.StartNavigation();
         GUILayout.Box("", GUILayout.ExpandWidth(true), GUILayout.Height(4));
 
@@ -527,7 +590,7 @@ public class BoltExplorer : EditorWindow
             var graph = unitData.flowGraph;
             var flowMacro = unitData.flowMacro;
 
-            EditorGUILayout.LabelField(sr.unitData.hierachy, hierachyStyle);
+            EditorGUILayout.LabelField($@"<b>[{n.RefCount}]</b> {sr.unitData.hierachy}", hierachyStyle);
             EditorGUILayout.BeginHorizontal();
             if (GUILayout.Button(unit.ToSafeString(), GUILayout.Width(200)))
             {
@@ -542,24 +605,46 @@ public class BoltExplorer : EditorWindow
                 {
                     if (!unitData.superUnit.IsUnityNull())
                     {
+                        // Open SuperUnit
                         var graphRef = GraphReference.New(flowMacro, true);
-                        var childGraphRef = graphRef.ChildReference(unitData.superUnit, false);
-                        GraphWindow.OpenTab(childGraphRef);
+
+                        var hierachyUnits = new List<SuperUnit>();
+
+                        var currUnitData = unitData;
+                        while (currUnitData != null && !currUnitData.superUnit.IsUnityNull())
+                        {
+                            hierachyUnits.Insert(0, currUnitData.superUnit);
+                            currUnitData = unitList.Find(x => x.unit == currUnitData.superUnit);
+                        }
+                        for (int i = 0; i < hierachyUnits.Count; i++)
+                        {
+                            var u = hierachyUnits[i];
+                            Debug.Log($"{u.ToString()} { u.nest.graph.title}");
+                            var currGraphRef = graphRef.ChildReference(u, false);
+
+                            if (!currGraphRef.IsUnityNull())
+                            {
+                                graphRef = currGraphRef;
+                            }
+                        }
+                        GraphWindow.OpenActive(graphRef);
                     }
                     else
                     {
+                        // Open Macro
                         GraphWindow.OpenActive(GraphReference.New(flowMacro, true));
                     }
                 }
+                // Pan
                 graph.pan = unit.position;
             }
             if (mb)
             {
-                EditorGUILayout.ObjectField(mb, typeof(MonoBehaviour), true, GUILayout.Width(150));
+                EditorGUILayout.ObjectField(mb, typeof(MonoBehaviour), true, GUILayout.Width(200));
             }
             if (flowMacro)
             {
-                EditorGUILayout.ObjectField(flowMacro, typeof(FlowMacro), true, GUILayout.Width(150));
+                EditorGUILayout.ObjectField(flowMacro, typeof(FlowMacro), true, GUILayout.Width(200));
             }
             EditorGUILayout.EndHorizontal();
 
@@ -570,37 +655,11 @@ public class BoltExplorer : EditorWindow
                 var pd = idx >= 0 ? sr.unitData.portDatas[idx] : null;
                 if (pd != null)
                 {
-                    var portName = "";
-                    string valueContent = string.Empty;
-
-                    if (!pd.vid.IsUnityNull())
-                    {
-                        portName = string.IsNullOrEmpty(pd.vid.label)? pd.vid.key: pd.vid.label;
-                        var su = unit as SuperUnit;
-                        if (su.defaultValues.TryGetValue(pd.vid.key, out object dv))
-                        {
-                            valueContent = dv as string;
-                        }
-                    }
-                    else if (pd.fi != null)
-                    {
-                        portName = pd.fi.DisplayName();
-                        valueContent = pd.fi.GetValue(pd.target) as string;
-                    }
-                    else
-                    {
-                        portName = pd.isInput ? pd.valueInput.key : pd.valueOutput.key;
-                        if (pd.pi != null)
-                        {
-                            var pl = pd.pi.GetCustomAttribute<PortLabelAttribute>();
-                            if (pl != null)
-                                portName = pl.label;
-                        }
-                        valueContent = pd.isInput ? pd.inputValue as string : pd.outputValue as string;
-                    }
+                    var portName = pd.GetPortName();
+                    string valueContent = pd.GetValueCache<string>();
 
                     EditorGUILayout.BeginHorizontal();
-                    EditorGUILayout.LabelField((pd.isInput? "[IN]": "[OUT]") + $" {portName}", GUILayout.Width(150));
+                    EditorGUILayout.LabelField($"{portName}", GUILayout.Width(200));
                     EditorGUILayout.TextField(valueContent, GUILayout.Width(200));
                     EditorGUILayout.EndHorizontal();
                 }
@@ -611,6 +670,8 @@ public class BoltExplorer : EditorWindow
         }
 
         EditorGUILayout.EndScrollView();
+
+        GUILayout.Box("", GUILayout.ExpandWidth(true), GUILayout.Height(4));
 
         // End Navigation
         n.EndNavigation();
