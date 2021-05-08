@@ -240,11 +240,18 @@ public class BoltExplorer : EditorWindow
                 if (getValueFI != null)
                 {
                     var getValueFunc = (System.Func<Flow, System.Object>)getValueFI.GetValue(valueOutput);
-                    var obj = getValueFunc.Target;
-                    if (obj.GetType() == typeof(Literal))
+                    if (getValueFunc != null)
                     {
-                        var literal = obj as Literal;
-                        value = literal.value;
+                        var obj = getValueFunc.Target;
+                        if (obj.GetType() == typeof(Literal))
+                        {
+                            var literal = obj as Literal;
+                            value = literal.value;
+                        }
+                    }
+                    else
+                    {
+                        Debug.LogError($"Can't find getValue function on {unit.ToString()}");
                     }
                 }
             }
@@ -531,17 +538,11 @@ public class BoltExplorer : EditorWindow
         }
     }
     #endregion
-
-    static GUIStyle hierachyStyle;
-
+    
     private void OnGUI()
     {
-        if (hierachyStyle == null)
-        {
-            hierachyStyle = new GUIStyle();
-            hierachyStyle.fontSize = 12;
-
-        }
+        GUIStyle style = new GUIStyle("label");
+        style.richText = true;
 
         EditorGUILayout.BeginHorizontal();
         mode = (Mode)EditorGUILayout.EnumPopup(mode, GUILayout.Width(100));
@@ -590,7 +591,7 @@ public class BoltExplorer : EditorWindow
             var graph = unitData.flowGraph;
             var flowMacro = unitData.flowMacro;
 
-            EditorGUILayout.LabelField($@"<b>[{n.RefCount}]</b> {sr.unitData.hierachy}", hierachyStyle);
+            EditorGUILayout.LabelField($@"<b>[{n.RefCount}]</b> {sr.unitData.hierachy}", style);
             EditorGUILayout.BeginHorizontal();
             if (GUILayout.Button(unit.ToSafeString(), GUILayout.Width(200)))
             {
